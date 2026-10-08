@@ -59,7 +59,6 @@ const abis = {
   getLastPaymentId: 'function getLastPaymentId() internal view returns (uint256)',
   getPayment: 'function getPayment(string calldata _paymentId) internal view returns (tuple(string roleId, string creditPoolId, uint8 paymentType, uint64 timeStamp, address from, address to, uint256 amount) memory)',
   getPoolToken: 'function getPoolToken(string memory _poolId) internal view returns (address)',
-  getTokenBalance: 'function getTokenBalance(string calldata _roleId, address _token) external view returns (uint256)',
 }
 
 const eventAbis = {
@@ -84,20 +83,15 @@ async function getInstitutionalPayments(api) {
   return { factory, payments }
 }
 
-// Lender balances still sitting in the institutional factory
+// All stablecoin the institutional factory still holds: lender ledger balances plus pool-level
+// repaid/undistributed funds. balanceOf equals the sum of both, so one read captures everything
+// without double-counting borrowed (reconstructed from payment records, i.e. funds already lent out).
 async function institutionalTvl(api) {
   const chain = api.chain;
-  const { factory, payments } = await getInstitutionalPayments(api)
+  const { address: factory } = config[chain].institutional;
   const usdtAddress = chain === 'hedera' ? ADDRESSES.hedera.USDT_HTS : ADDRESSES[chain].USDT;
   const usdcAddress = ADDRESSES[chain].USDC;
-
-  const lenderIDs = [...new Set(payments.filter(p => +p[2] === 2).map(p => p[0]))];
-  const balanceCalls = lenderIDs.flatMap(id => [
-    { target: factory, params: [id, usdtAddress] },
-    { target: factory, params: [id, usdcAddress] },
-  ]);
-  const balances = await api.multiCall({ abi: abis.getTokenBalance, calls: balanceCalls });
-  balances.forEach((bal, i) => api.add(i % 2 === 0 ? usdtAddress : usdcAddress, bal));
+  return api.sumTokens({ owner: factory, tokens: [usdtAddress, usdcAddress] });
 }
 
 // Institutional pools: outstanding principal is investments minus principal repaid, per pool token
